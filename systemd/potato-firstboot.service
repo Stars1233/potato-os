@@ -1,0 +1,14 @@
+[Unit]
+Description=Potato OS first boot setup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/potato/state/firstboot.done
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/potato/bin/firstboot.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

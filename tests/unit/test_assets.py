@@ -1,0 +1,420 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from app.main import CHAT_HTML
+
+
+def test_start_llama_contains_required_flags():
+    script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
+
+    assert "--ctx-size" in script
+    assert "16384" in script
+    assert "--jinja" in script
+    assert "--slot-save-path" in script
+
+
+def test_run_script_defaults_to_llama_backend_without_fake_fallback():
+    script = Path("bin/run.sh").read_text(encoding="utf-8")
+
+    assert 'POTATO_CHAT_BACKEND="${POTATO_CHAT_BACKEND:-llama}"' in script
+    assert 'POTATO_ALLOW_FAKE_FALLBACK="${POTATO_ALLOW_FAKE_FALLBACK:-0}"' in script
+    assert 'POTATO_CHAT_BACKEND="${POTATO_CHAT_BACKEND:-auto}"' not in script
+
+
+def test_potato_service_points_to_run_script():
+    unit_file = Path("systemd/potato.service").read_text(encoding="utf-8")
+
+    assert "User=potato" in unit_file
+    assert "ExecStart=/opt/potato/bin/run.sh" in unit_file
+    assert "Restart=always" in unit_file
+
+
+def test_firstboot_service_avoids_repeating_setup():
+    unit_file = Path("systemd/potato-firstboot.service").read_text(encoding="utf-8")
+
+    assert "ConditionPathExists=!/opt/potato/state/firstboot.done" in unit_file
+    assert "ExecStart=/opt/potato/bin/firstboot.sh" in unit_file
+
+
+def test_uninstall_script_targets_pi_runtime_only():
+    script = Path("bin/uninstall_dev.sh").read_text(encoding="utf-8")
+
+    assert "systemctl disable --now potato.service potato-firstboot.service" in script
+    assert "rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service" in script
+    assert "rm -rf \"${TARGET_ROOT}\" /tmp/potato-os" in script
+    assert "userdel \"${POTATO_USER}\"" in script
+    assert "groupdel \"${POTATO_GROUP}\"" in script
+
+
+def test_smoke_script_retries_connection_refused():
+    script = Path("tests/e2e/smoke_pi.sh").read_text(encoding="utf-8")
+
+    assert "--retry-connrefused" in script
+    assert "--retry-all-errors" in script
+
+
+def test_stream_chat_script_validates_sse_done_and_chunk_object():
+    script = Path("tests/e2e/stream_chat_pi.sh").read_text(encoding="utf-8")
+
+    assert "[DONE]" in script
+    assert "chat.completion.chunk" in script
+    assert "delta.role == \"assistant\"" in script
+    assert "STREAM_PROMPT" in script
+    assert 'if [ "$#" -gt 0 ]; then' in script
+    assert "Throughput:" in script
+    assert "timings.predicted_per_second" in script
+
+
+def test_install_script_uses_reference_llama_bundle_sync():
+    script = Path("bin/install_dev.sh").read_text(encoding="utf-8")
+
+    assert "references/old_reference_design/llama_cpp_binary" in script
+    assert "POTATO_LLAMA_BUNDLE_SRC" in script
+    assert "llama_server_bundle_" in script
+    assert "TARGET_ROOT}/llama" in script
+    assert "apt-get install -y \\" in script
+    assert "nginx \\" in script
+    assert "/etc/nginx/sites-available/potato" in script
+    assert "systemctl enable avahi-daemon nginx" in script
+    assert "usermod -a -G video" in script
+    assert 'POTATO_HOSTNAME="${POTATO_HOSTNAME:-potato}"' in script
+    assert 'POTATO_ENFORCE_HOSTNAME="${POTATO_ENFORCE_HOSTNAME:-1}"' in script
+    assert "hostnamectl set-hostname" in script
+    assert '"127.0.1.1 " hostname ".local " hostname' in script
+    assert "avahi-daemon.conf" in script
+    assert "host-name=${POTATO_HOSTNAME}" in script
+
+
+def test_prepare_imager_bundle_script_wires_first_boot_installer():
+    script = Path("bin/prepare_imager_bundle.sh").read_text(encoding="utf-8")
+
+    assert "--boot-path" in script
+    assert "--output-dir" in script
+    assert "firstrun.sh" in script
+    assert "POTATO_BUNDLE_HOOK_START" in script
+    assert "install_potato_from_bundle.sh" in script
+    assert "potato_firstrun_hook.sh" in script
+    assert "POTATO_LLAMA_BUNDLE_SRC" in script
+    assert "bundle_install.done" in script
+
+
+def test_local_image_build_script_collects_artifacts_for_flash_test():
+    script = Path("bin/build_local_image.sh").read_text(encoding="utf-8")
+
+    assert "/usr/bin/time -p" in script
+    assert "image/build-all.sh" in script
+    assert "--variant" in script
+    assert "--no-update-pi-gen" in script
+    assert "pigen_work" in script
+    assert "local-test-" in script
+    assert "SHA256SUMS.source" in script
+    assert "METADATA.json" in script
+    assert "build_command" in script
+    assert "README-local-test.txt" in script
+    assert 'cat > "${bundle_dir}/README.md"' in script
+    assert "Use In Raspberry Pi Imager" in script
+    assert "Content Repository" in script
+    assert "generate_imager_manifest.py" in script
+    assert ".rpi-imager-manifest" in script
+    assert "Raspberry Pi 5" in script
+    assert "python3" in script
+    assert "--clean-artifacts <mode>" in script
+    assert "--clean-artifacts-yes" in script
+    assert "--clean-artifacts-no" in script
+    assert "Previous artifacts found" in script
+    assert "Remove them before build? [y/N]:" in script
+    assert "CLEAN_ARTIFACTS_MODE" in script
+
+
+def test_imager_manifest_generator_is_pi5_only():
+    script = Path("bin/generate_imager_manifest.py").read_text(encoding="utf-8")
+
+    assert "pi5-64bit" in script
+    assert "Raspberry Pi 5" in script
+    assert "rpi-imager-manifest" in script
+    assert "extract_sha256" in script
+    assert "image_download_sha256" in script
+
+
+def test_image_build_scripts_exist_for_lite_and_full_variants():
+    lite = Path("image/build-lite.sh").read_text(encoding="utf-8")
+    full = Path("image/build-full.sh").read_text(encoding="utf-8")
+    all_in_one = Path("image/build-all.sh").read_text(encoding="utf-8")
+    uv_script = Path("image/build_all.py").read_text(encoding="utf-8")
+    common = Path("image/lib/common.sh").read_text(encoding="utf-8")
+
+    assert "run_build lite" in lite
+    assert "run_build full" in full
+    assert "POTATO_PI_GEN_DIR" in common
+    assert "POTATO_SSH_USER" in common
+    assert "POTATO_SSH_PASSWORD" in common
+    assert "pi" in common
+    assert "raspberry" in common
+    assert "POTATO_IMAGE_OUTPUT_DIR" in common
+    assert "potato-lite" in common
+    assert "potato-full" in common
+    assert "uv run --script" in all_in_one
+    assert "--variant" in uv_script
+    assert "https://github.com/RPi-Distro/pi-gen.git" in uv_script
+    assert "POTATO_PI_GEN_DIR" in uv_script
+    assert "POTATO_PI_GEN_USE_DOCKER" in uv_script
+    assert "build-docker.sh" in common
+    assert "DOCKER_BUILDKIT=0" in common
+    assert "container_name=\"potato-pigen-${variant}\"" in common
+    assert "docker rm -f" in common
+    assert "docker context use default" in uv_script
+    assert "colima start" in uv_script
+    assert "except RuntimeError as exc" in uv_script
+    assert "except subprocess.CalledProcessError as exc" in uv_script
+    assert "--setup-docker" in uv_script
+    assert 'run(["brew", "install", "docker", "colima"])' in uv_script
+
+
+def test_image_stage_assets_define_systemd_firstboot_image_flow():
+    packages = Path("image/stage-potato/00-potato/00-packages").read_text(encoding="utf-8")
+    run_script = Path("image/stage-potato/00-potato/00-run.sh").read_text(encoding="utf-8")
+    prerun_script = Path("image/stage-potato/prerun.sh").read_text(encoding="utf-8")
+    export_marker = Path("image/stage-potato/EXPORT_IMAGE").read_text(encoding="utf-8")
+
+    assert "avahi-daemon" in packages
+    assert "nginx" in packages
+    assert "python3-venv" in packages
+    assert 'rsync -a files/ "${ROOTFS_DIR}/"' in run_script
+    assert '"${ROOTFS_DIR}/opt/potato"' in run_script
+    assert "on_chroot <<'EOF'" in run_script
+    assert "systemctl enable potato-firstboot.service potato.service nginx avahi-daemon" in run_script
+    assert "potato-firstboot.service" in run_script
+    assert "potato.service" in run_script
+    assert "potato.local" in run_script
+    assert "usermod -a -G video potato" in run_script
+    assert 'printf \'potato\\n\' > "${ROOTFS_DIR}/etc/hostname"' in run_script
+    assert "127.0.1.1 potato.local potato" in run_script
+    assert "host-name=potato" in run_script
+    assert "copy_previous" in prerun_script
+    assert export_marker.strip() == ""
+
+
+def test_firstboot_script_enforces_potato_hostname_and_avahi_refresh():
+    firstboot = Path("bin/firstboot.sh").read_text(encoding="utf-8")
+
+    assert 'POTATO_HOSTNAME="${POTATO_HOSTNAME:-potato}"' in firstboot
+    assert 'POTATO_ENFORCE_HOSTNAME="${POTATO_ENFORCE_HOSTNAME:-1}"' in firstboot
+    assert "hostnamectl set-hostname" in firstboot
+    assert '"127.0.1.1 " hostname ".local " hostname' in firstboot
+    assert "avahi-daemon.conf" in firstboot
+    assert "host-name=${POTATO_HOSTNAME}" in firstboot
+    assert "systemctl restart avahi-daemon" in firstboot
+
+
+def test_gitignore_excludes_large_artifacts_and_model_downloads():
+    ignore = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "models/" in ignore
+    assert "output/" in ignore
+    assert ".cache/potato-image-build/" in ignore
+    assert ".cache/potato-image-cache/" in ignore
+    assert ".cache/pi-gen-arm64/" in ignore
+
+
+def test_chat_ui_streaming_parses_sse_and_ignores_done_marker():
+    assert "function consumeSseDeltas" in CHAT_HTML
+    assert 'dataPayload === "[DONE]"' in CHAT_HTML
+    assert "event?.choices?.[0]?.delta?.content" in CHAT_HTML
+    assert "updateMessage(assistantDiv, assistantText)" in CHAT_HTML
+    assert 'renderMessage("assistant", output.trim())' not in CHAT_HTML
+
+
+def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
+    assert 'class="theme-toggle"' in CHAT_HTML
+    assert 'id="themeToggle"' in CHAT_HTML
+    assert "theme-icon--moon" in CHAT_HTML
+    assert "theme-icon--sun" in CHAT_HTML
+    assert "Switch to light theme" in CHAT_HTML
+    assert 'id="theme"' not in CHAT_HTML
+    assert "applyTheme(" in CHAT_HTML
+    assert 'id="systemPrompt"' in CHAT_HTML
+    assert "System Prompt (optional)" in CHAT_HTML
+    assert 'userPrompt.addEventListener("keydown"' in CHAT_HTML
+    assert 'event.key === "Enter"' in CHAT_HTML
+    assert "!event.shiftKey" in CHAT_HTML
+
+
+def test_chat_ui_keeps_theme_toggle_clear_of_status_badge():
+    assert ".chat-header {" in CHAT_HTML
+    assert "padding: 2px 14px 2px 6px;" in CHAT_HTML
+    assert ".theme-toggle {" in CHAT_HTML
+    assert "z-index: 24;" in CHAT_HTML
+
+
+def test_chat_ui_copy_and_stats_footnote_contract():
+    assert "Local-first chat frontend on your Pi." in CHAT_HTML
+    assert "Local-first chat front end on your Pi." not in CHAT_HTML
+    assert "Press Enter to send. Shift+Enter adds a new line." not in CHAT_HTML
+    assert 'meta.className = "message-meta"' in CHAT_HTML
+    assert "function formatStopReason(" in CHAT_HTML
+    assert "function formatAssistantStats(" in CHAT_HTML
+    assert "tok/sec" in CHAT_HTML
+    assert "Stop reason:" in CHAT_HTML
+    assert "EOS Token found" in CHAT_HTML
+    assert 'case "tool_calls"' in CHAT_HTML
+    assert "content_filter" not in CHAT_HTML
+    assert "function_call" not in CHAT_HTML
+
+
+def test_chat_ui_supports_stop_generation_button_and_abort_controller():
+    assert "let activeRequest = null;" in CHAT_HTML
+    assert "function stopGeneration()" in CHAT_HTML
+    assert "function requestLlamaCancelRecovery(" in CHAT_HTML
+    assert "function requestLlamaRestart(" in CHAT_HTML
+    assert "function scheduleImageCancelRestartFallback(" in CHAT_HTML
+    assert "IMAGE_CANCEL_RESTART_DELAY_MS" in CHAT_HTML
+    assert "function queueImageCancelRecovery(" in CHAT_HTML
+    assert 'sendBtn.textContent = "Stop"' in CHAT_HTML
+    assert 'sendBtn.classList.add("stop-mode")' in CHAT_HTML
+    assert "controller: new AbortController()" in CHAT_HTML
+    assert "signal: requestCtx.controller.signal" in CHAT_HTML
+    assert 'if (requestInFlight) {' in CHAT_HTML
+    assert "stopGeneration();" in CHAT_HTML
+    assert "queueImageCancelRecovery(current);" in CHAT_HTML
+    assert "if (!requestCtx?.hasImageRequest)" in CHAT_HTML
+    assert "/internal/llama-healthz" in CHAT_HTML
+    assert "/internal/cancel-llama" in CHAT_HTML
+    assert "/internal/restart-llama" in CHAT_HTML
+    assert 'case "cancelled"' in CHAT_HTML
+
+
+def test_chat_ui_shows_llama_connection_indicator():
+    assert 'id="llamaIndicator"' not in CHAT_HTML
+    assert 'id="llamaIndicatorLabel"' not in CHAT_HTML
+    assert 'id="statusDot"' in CHAT_HTML
+    assert 'id="statusLabel"' in CHAT_HTML
+    assert "indicator-dot" in CHAT_HTML
+    assert "function updateLlamaIndicator(" in CHAT_HTML
+    assert "statusPayload?.llama_server?.healthy" in CHAT_HTML
+    assert 'label.textContent = "CONNECTED"' in CHAT_HTML
+    assert 'label.textContent = "DISCONNECTED"' in CHAT_HTML
+    assert 'dot.classList.add("online")' in CHAT_HTML
+    assert 'dot.classList.add("offline")' in CHAT_HTML
+    assert "Llama server: connected" not in CHAT_HTML
+
+
+def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
+    assert "const chatHistory = [];" in CHAT_HTML
+    assert "reqBody.messages = reqBody.messages.concat(chatHistory);" in CHAT_HTML
+    assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_HTML
+    assert "chatHistory.push(userMessage);" in CHAT_HTML
+    assert CHAT_HTML.index("reqBody.messages.push(userMessage);") < CHAT_HTML.index("chatHistory.push(userMessage);")
+    assert "chatHistory.push({ role: \"assistant\", content: assistantText.trim() || \"(empty response)\" });" in CHAT_HTML
+    assert "chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_HTML
+
+
+def test_chat_ui_formats_download_sizes_and_shows_model_filename_in_settings():
+    assert 'id="modelName"' in CHAT_HTML
+    assert "Loaded Model" in CHAT_HTML
+    assert "readonly" in CHAT_HTML
+    assert "function formatBytes(" in CHAT_HTML
+    assert "units = [\"B\", \"KB\", \"MB\", \"GB\", \"TB\"]" in CHAT_HTML
+    assert "formatBytes(statusPayload.download.bytes_downloaded)" in CHAT_HTML
+    assert "formatBytes(statusPayload.download.bytes_total)" in CHAT_HTML
+    assert "statusPayload?.model?.filename" in CHAT_HTML
+    assert "modelNameField.value" in CHAT_HTML
+
+
+def test_chat_ui_supports_manual_or_idle_model_download_prompt():
+    assert 'id="downloadPrompt"' in CHAT_HTML
+    assert 'id="startDownloadBtn"' in CHAT_HTML
+    assert 'id="downloadPromptHint"' in CHAT_HTML
+    assert "function startModelDownload(" in CHAT_HTML
+    assert "function renderDownloadPrompt(" in CHAT_HTML
+    assert 'fetch("/internal/start-model-download"' in CHAT_HTML
+    assert "Auto-download starts in" in CHAT_HTML
+    assert "statusPayload.download.auto_start_remaining_seconds" in CHAT_HTML
+
+
+def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
+    assert 'id="systemRuntimeCard"' in CHAT_HTML
+    assert 'id="runtimeCompact"' in CHAT_HTML
+    assert 'id="runtimeDetails"' in CHAT_HTML
+    assert 'id="runtimeViewToggle"' in CHAT_HTML
+    assert 'id="runtimeDetailCpuClock"' in CHAT_HTML
+    assert "Show details" in CHAT_HTML
+    assert "function setRuntimeDetailsExpanded(" in CHAT_HTML
+    assert "function renderSystemRuntime(" in CHAT_HTML
+    assert "CPU clock:" in CHAT_HTML
+    assert "renderSystemRuntime(statusPayload?.system)" in CHAT_HTML
+    assert CHAT_HTML.index('id="systemRuntimeCard"') < CHAT_HTML.index('<details class="settings"')
+
+
+def test_chat_ui_supports_image_upload_for_vision_messages():
+    assert 'id="imageInput"' in CHAT_HTML
+    assert 'accept="image/*"' in CHAT_HTML
+    assert 'id="attachImageBtn"' in CHAT_HTML
+    assert 'for="imageInput"' not in CHAT_HTML
+    assert 'id="attachImageBtn" class="attach-btn" type="button">Attach image</button>' in CHAT_HTML
+    assert "function handleImageSelected(" in CHAT_HTML
+    assert "FileReader()" in CHAT_HTML
+    assert "reader.readAsDataURL(file);" in CHAT_HTML
+    assert "pendingImage = {" in CHAT_HTML
+    assert "type: \"image_url\"" in CHAT_HTML
+    assert "image_url: { url: pendingImage.dataUrl }" in CHAT_HTML
+    assert "function openImagePicker(" in CHAT_HTML
+    assert "input.showPicker()" not in CHAT_HTML
+    assert "input.click();" in CHAT_HTML
+    assert 'document.getElementById("attachImageBtn").addEventListener("click", openImagePicker);' in CHAT_HTML
+    assert 'document.getElementById("attachImageBtn").addEventListener("click", (event) => {' not in CHAT_HTML
+    assert 'document.getElementById("attachImageBtn").addEventListener("keydown"' not in CHAT_HTML
+
+
+def test_chat_ui_renders_image_thumbnail_in_user_bubble():
+    assert "function buildUserBubblePayload(" in CHAT_HTML
+    assert "imageDataUrl: pendingImage.dataUrl" in CHAT_HTML
+    assert 'thumbnail.className = "message-image-thumb"' in CHAT_HTML
+    assert 'thumbnail.src = imageDataUrl;' in CHAT_HTML
+    assert "bubble.replaceChildren();" in CHAT_HTML
+    assert 'caption.className = "message-text"' in CHAT_HTML
+
+
+def test_chat_ui_compresses_large_images_before_send():
+    assert "const IMAGE_SAFE_MAX_BYTES = 140 * 1024;" in CHAT_HTML
+    assert "const IMAGE_MAX_DIMENSION = 896;" in CHAT_HTML
+    assert "const IMAGE_MAX_PIXEL_COUNT = IMAGE_MAX_DIMENSION * IMAGE_MAX_DIMENSION;" in CHAT_HTML
+    assert "function estimateDataUrlBytes(" in CHAT_HTML
+    assert "function inspectImageDataUrl(" in CHAT_HTML
+    assert "function compressImageDataUrl(" in CHAT_HTML
+    assert "function maybeCompressImage(" in CHAT_HTML
+    assert "const needsResize =" in CHAT_HTML
+    assert "metadata.maxDim > IMAGE_MAX_DIMENSION" in CHAT_HTML
+    assert "metadata.pixelCount > IMAGE_MAX_PIXEL_COUNT" in CHAT_HTML
+    assert "setComposerActivity(\"Optimizing image...\")" in CHAT_HTML
+    assert "await maybeCompressImage(result, file);" in CHAT_HTML
+    assert "optimized from" in CHAT_HTML
+
+
+def test_chat_ui_shows_processing_indicator_while_generating():
+    assert 'id="composerActivity"' in CHAT_HTML
+    assert 'id="composerStatusChip"' in CHAT_HTML
+    assert 'id="composerStatusText"' in CHAT_HTML
+    assert 'class="composer-status-chip"' in CHAT_HTML
+    assert 'id="cancelBtn"' in CHAT_HTML
+    assert "function setComposerActivity(" in CHAT_HTML
+    assert "function setComposerStatusChip(" in CHAT_HTML
+    assert "function hideComposerStatusChip(" in CHAT_HTML
+    assert "function setCancelEnabled(" in CHAT_HTML
+    assert "function cancelCurrentWork(" in CHAT_HTML
+    assert "const PREFILL_PROGRESS_CAP = 95;" in CHAT_HTML
+    assert "function estimatePrefillEtaMs(" in CHAT_HTML
+    assert "function beginPrefillProgress(" in CHAT_HTML
+    assert "function markPrefillGenerationStarted(" in CHAT_HTML
+    assert "function stopPrefillProgress(" in CHAT_HTML
+    assert "potato_prefill_metrics_v1" in CHAT_HTML
+    assert "Preparing prompt..." in CHAT_HTML
+    assert "Preparing prompt • " in CHAT_HTML
+    assert "Preparing prompt: " not in CHAT_HTML
+    assert "Math.min(PREFILL_PROGRESS_CAP" in CHAT_HTML
+    assert 'setComposerStatusChip("Generating..."' in CHAT_HTML
+    assert 'setComposerActivity("Reading image...")' in CHAT_HTML
+    assert "reader.onprogress" in CHAT_HTML
+    assert "pendingImageReader.abort();" in CHAT_HTML
+    assert 'document.getElementById("cancelBtn").addEventListener("click", cancelCurrentWork);' in CHAT_HTML
+    assert "setComposerActivity(\"\")" in CHAT_HTML

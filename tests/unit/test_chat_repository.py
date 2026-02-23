@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from app.repositories import chat_repository
+
+
+class _FakeUpstream:
+    def __init__(self) -> None:
+        self.status_code = 200
+        self.headers = {"content-type": "text/event-stream"}
+        self.closed = False
+
+    async def aiter_raw(self):
+        yield b"data: hello\n\n"
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _FakeAsyncClient:
+    def __init__(self, upstream: _FakeUpstream) -> None:
+        self._upstream = upstream
+        self.closed = False
+
+    def build_request(self, method: str, url: str, json: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        return {"method": method, "url": url, "json": json, "headers": headers}
+
+    async def send(self, request: dict[str, Any], stream: bool = False) -> _FakeUpstream:
+        _ = request
+        assert stream is True
+        return self._upstream
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_llama_stream_closes_upstream_and_client_when_consumer_closes(monkeypatch: pytest.MonkeyPatch):
+    upstream = _FakeUpstream()
+    client = _FakeAsyncClient(upstream)
+
+    def _client_factory(*args: Any, **kwargs: Any) -> _FakeAsyncClient:
+        _ = args, kwargs
+        return client
+
+    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _client_factory)
+
+    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    response = await repo.create_chat_completion(
+        payload={"stream": True, "messages": [{"role": "user", "content": "ping"}]},
+        forward_headers={},
+    )
+
+    assert response.stream is not None
+    stream = response.stream
+
+    first = await anext(stream)
+    assert first == b"data: hello\n\n"
+
+    await stream.aclose()
+
+    assert upstream.closed is True
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_fake_stream_uses_test_mode_prefill_and_chunk_delay(monkeypatch: pytest.MonkeyPatch):
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setenv("POTATO_TEST_MODE", "1")
+    monkeypatch.setenv("POTATO_FAKE_PREFILL_DELAY_MS", "250")
+    monkeypatch.setenv("POTATO_FAKE_STREAM_CHUNK_DELAY_MS", "40")
+    monkeypatch.setattr(chat_repository.asyncio, "sleep", _fake_sleep)
+
+    repo = chat_repository.FakeLlamaRepository()
+    response = await repo.create_chat_completion(
+        payload={"stream": True, "messages": [{"role": "user", "content": "hello"}]},
+        forward_headers={},
+    )
+
+    assert response.stream is not None
+    chunks = []
+    async for chunk in response.stream:
+        chunks.append(chunk.decode("utf-8"))
+        if "[DONE]" in chunks[-1]:
+            break
+
+    assert any('"delta":{"role":"assistant"}' in chunk for chunk in chunks)
+    assert 0.25 in sleep_calls
+    assert 0.04 in sleep_calls
+
+
+@pytest.mark.asyncio
+async def test_fake_stream_ignores_prefill_delay_without_test_mode(monkeypatch: pytest.MonkeyPatch):
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.delenv("POTATO_TEST_MODE", raising=False)
+    monkeypatch.setenv("POTATO_FAKE_PREFILL_DELAY_MS", "250")
+    monkeypatch.setattr(chat_repository.asyncio, "sleep", _fake_sleep)
+
+    repo = chat_repository.FakeLlamaRepository()
+    response = await repo.create_chat_completion(
+        payload={"stream": True, "messages": [{"role": "user", "content": "hello"}]},
+        forward_headers={},
+    )
+
+    assert response.stream is not None
+    async for chunk in response.stream:
+        if b"[DONE]" in chunk:
+            break
+
+    assert 0.25 not in sleep_calls

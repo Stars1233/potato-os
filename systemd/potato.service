@@ -1,0 +1,19 @@
+[Unit]
+Description=Potato OS web service and orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=potato
+Group=potato
+WorkingDirectory=/opt/potato
+Environment=POTATO_BASE_DIR=/opt/potato
+ExecStart=/opt/potato/bin/run.sh
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

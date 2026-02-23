@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_ROOT="${POTATO_TARGET_ROOT:-/opt/potato}"
+POTATO_USER="${POTATO_USER:-potato}"
+POTATO_GROUP="${POTATO_GROUP:-potato}"
+REMOVE_PACKAGES="${REMOVE_PACKAGES:-0}"
+
+run_sudo() {
+  if [ "${EUID}" -eq 0 ]; then
+    "$@"
+    return
+  fi
+  if [ -n "${PI_PASSWORD:-}" ]; then
+    printf '%s\n' "${PI_PASSWORD}" | sudo -S -p '' "$@"
+    return
+  fi
+  sudo "$@"
+}
+
+run_sudo systemctl disable --now potato.service potato-firstboot.service || true
+run_sudo rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service
+run_sudo rm -f /etc/nginx/sites-enabled/potato /etc/nginx/sites-available/potato
+run_sudo systemctl disable --now nginx || true
+run_sudo systemctl daemon-reload
+
+run_sudo rm -rf "${TARGET_ROOT}" /tmp/potato-os
+
+if id -u "${POTATO_USER}" >/dev/null 2>&1; then
+  run_sudo userdel "${POTATO_USER}" || true
+fi
+
+if getent group "${POTATO_GROUP}" >/dev/null 2>&1; then
+  run_sudo groupdel "${POTATO_GROUP}" || true
+fi
+
+if [ "${REMOVE_PACKAGES}" = "1" ]; then
+  run_sudo apt-get remove --purge -y avahi-daemon nginx jq || true
+  run_sudo apt-get autoremove -y || true
+fi
+
+printf 'Pi rollback complete. Local Mac workspace was not modified.\n'
