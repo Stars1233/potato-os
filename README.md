@@ -113,8 +113,6 @@ See [Building Images](docs/building-images.md) for prerequisites, variants, and 
 ### Project
 
 - Board: [github.com/users/slomin/projects/8](https://github.com/users/slomin/projects/8)
-- Process: [`WORKFLOW.md`](WORKFLOW.md)
-- Conventions: [`AGENTS.md`](AGENTS.md)
 - Defaults: hostname `potato`, SSH `pi`/`raspberry`
 
 ## License
