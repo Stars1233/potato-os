@@ -163,3 +163,68 @@ def test_ensure_model_validates_size_before_mv():
     mv_pos = script.index('mv -f "${TMP_PATH}" "${MODEL_PATH}"')
     assert size_check_pos < mv_pos, "Size validation must occur before mv"
 
+
+def test_ensure_model_runs_curl_at_idle_io_priority():
+    script = Path("bin/ensure_model.sh").read_text(encoding="utf-8")
+
+    assert "ionice -c3 nice -n 19 curl" in script
+
+
+def test_start_llama_runs_projector_curl_at_idle_io_priority():
+    script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
+
+    assert "ionice -c3 nice -n 19 curl" in script
+
+
+def test_model_download_does_not_inline_projector_download():
+    """The projector download must NOT run inside start_model_download.
+    It must be handled by start_llama.sh to avoid overlapping large
+    writes that overwhelm SD card I/O on Pi 5."""
+    import inspect
+
+    from app.main import start_model_download
+
+    source = inspect.getsource(start_model_download)
+    assert "download_default_projector_for_model" not in source, (
+        "Projector download must not run inside start_model_download — "
+        "let start_llama.sh handle it sequentially to avoid I/O starvation"
+    )
+
+
+def test_build_status_offloads_filesystem_io_to_thread():
+    """build_status must use asyncio.to_thread to keep the event loop free."""
+    import inspect
+
+    from app.main import build_status
+
+    source = inspect.getsource(build_status)
+    assert "to_thread" in source, (
+        "build_status must use asyncio.to_thread for filesystem I/O — "
+        "sync reads block the event loop and freeze HTTP responses during downloads"
+    )
+
+
+def test_get_status_download_context_is_async():
+    """get_status_download_context must be async to use to_thread."""
+    import inspect
+
+    from app.main import get_status_download_context
+
+    assert inspect.iscoroutinefunction(get_status_download_context), (
+        "get_status_download_context must be async — "
+        "sync filesystem reads block the event loop during downloads"
+    )
+
+
+def test_orchestrator_allows_llama_restart_during_download():
+    """The orchestrator must not gate llama-server restart on download state."""
+    import inspect
+
+    from app.main import orchestrator_loop
+
+    source = inspect.getsource(orchestrator_loop)
+    assert "active_model_is_present and not download_active" not in source, (
+        "Orchestrator restart logic must run during downloads — "
+        "otherwise restart_managed_llama_process leaves llama dead until download finishes"
+    )
+
