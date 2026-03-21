@@ -157,9 +157,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
-        tmp.replace(path)
+        import tempfile
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload))
+        os.replace(tmp_name, path)
     except OSError:
         logger.warning("Could not persist JSON state to %s", path, exc_info=True)
 

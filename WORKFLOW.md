@@ -126,7 +126,7 @@ The `-m pytest` flag is required so Python adds the project root to `sys.path`, 
 
 **Full suite (fast, parallel):**
 ```bash
-npx playwright test --reporter=dot --timeout=15000 --workers=3 2>&1
+npx playwright test --reporter=dot --timeout=15000 --workers=75% 2>&1
 ```
 
 **Single spec file (for iterating on changes):**
@@ -152,7 +152,7 @@ Requires Chromium installed (`npx playwright install chromium` on first run). Th
 ### Running both before push
 
 ```bash
-uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test --reporter=dot --timeout=15000 --workers=3 2>&1
+uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test --reporter=dot --timeout=15000 --workers=75% 2>&1
 ```
 
 If either suite fails, fix the issue before pushing. Include summarized test output in the PR description.

@@ -67,7 +67,7 @@ POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1
 
 ```bash
 uv run python -m pytest tests/unit tests/api -q -n auto
-npx playwright test --reporter=dot --timeout=15000 --workers=3
+npx playwright test --reporter=dot --timeout=15000 --workers=75%
 ```
 
 ### Building llama runtimes

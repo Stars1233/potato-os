@@ -39,8 +39,8 @@ Tests are organized under `tests/`:
 
 ### Running tests (required before every push)
 - Python (unit + API): `uv run python -m pytest tests/unit tests/api -q -n auto`
-- Playwright (UI): `npx playwright test --reporter=dot --timeout=15000 --workers=3` (always use `--workers=3`)
-- Both together: `uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test --reporter=dot --timeout=15000 --workers=3`
+- Playwright (UI): `npx playwright test --reporter=dot --timeout=15000 --workers=75%`
+- Both together: `uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test --reporter=dot --timeout=15000 --workers=75%`
 - First-time Playwright setup: `npx playwright install chromium`
 
 ### Pi deployment

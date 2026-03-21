@@ -8,7 +8,7 @@ module.exports = defineConfig({
   },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
-  workers: 1,
+  workers: "75%",
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:1983",
