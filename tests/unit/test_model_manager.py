@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -9,8 +8,6 @@ from app.main import compute_auto_download_remaining_seconds, create_app, start_
 from app.model_state import (
     describe_model_storage,
     ensure_models_state,
-    move_model_to_ssd,
-    resolve_active_model,
     resolve_model_runtime_path,
     validate_model_url,
 )
@@ -80,67 +77,6 @@ def test_ensure_models_state_marks_default_downloaded_once_when_file_exists(runt
     state = ensure_models_state(runtime)
 
     assert state["default_model_downloaded_once"] is True
-
-
-def test_move_model_to_ssd_replaces_local_model_with_symlink(runtime: RuntimeConfig):
-    runtime.model_path.write_bytes(b"default-model")
-    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
-    ssd_dir.mkdir(parents=True)
-
-    moved, reason, details = move_model_to_ssd(runtime, model_id="default", ssd_dir=ssd_dir)
-
-    assert moved is True
-    assert reason == "moved"
-    assert runtime.model_path.is_symlink()
-    assert runtime.model_path.resolve() == ssd_dir / runtime.model_path.name
-    assert (ssd_dir / runtime.model_path.name).read_bytes() == b"default-model"
-    assert details["location"] == "ssd"
-
-
-def test_describe_model_storage_marks_symlinked_model_as_ssd(runtime: RuntimeConfig):
-    runtime.model_path.write_bytes(b"default-model")
-    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
-    ssd_dir.mkdir(parents=True)
-    target = ssd_dir / runtime.model_path.name
-    target.write_bytes(b"default-model")
-    runtime.model_path.unlink()
-    runtime.model_path.symlink_to(target)
-
-    details = describe_model_storage(runtime, runtime.model_path.name, ssd_dir=ssd_dir)
-
-    assert details["location"] == "ssd"
-    assert details["is_symlink"] is True
-    assert Path(details["actual_path"]) == target
-
-
-def test_resolve_model_runtime_path_returns_symlink_target(runtime: RuntimeConfig):
-    runtime.model_path.write_bytes(b"default-model")
-    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
-    ssd_dir.mkdir(parents=True)
-    target = ssd_dir / runtime.model_path.name
-    target.write_bytes(b"default-model")
-    runtime.model_path.unlink()
-    runtime.model_path.symlink_to(target)
-
-    resolved = resolve_model_runtime_path(runtime, runtime.model_path.name)
-
-    assert resolved == target
-
-
-def test_resolve_active_model_updates_runtime_to_resolved_ssd_target(runtime: RuntimeConfig):
-    runtime.model_path.write_bytes(b"default-model")
-    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
-    ssd_dir.mkdir(parents=True)
-    target = ssd_dir / runtime.model_path.name
-    target.write_bytes(b"default-model")
-    runtime.model_path.unlink()
-    runtime.model_path.symlink_to(target)
-    state = ensure_models_state(runtime)
-
-    _model, active_path = resolve_active_model(state, runtime)
-
-    assert active_path == target
-    assert runtime.model_path == target
 
 
 @pytest.mark.anyio
@@ -226,3 +162,39 @@ async def test_start_model_download_does_not_fail_precheck_when_free_space_unkno
     task = app.state.model_download_task
     assert task is not None
     await task
+
+
+def test_resolve_model_runtime_path_follows_symlinks(runtime: RuntimeConfig):
+    """Legacy SSD-backed models are symlinked — path resolution must follow them."""
+    external_dir = runtime.base_dir / "external-drive" / "potato-models"
+    external_dir.mkdir(parents=True, exist_ok=True)
+    real_file = external_dir / runtime.model_path.name
+    real_file.write_bytes(b"gguf-on-ssd")
+
+    models_dir = runtime.base_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    symlink = models_dir / runtime.model_path.name
+    symlink.symlink_to(real_file)
+
+    resolved = resolve_model_runtime_path(runtime, runtime.model_path.name)
+    assert resolved == real_file.resolve()
+    assert not resolved.is_symlink()
+
+
+def test_resolve_model_runtime_path_returns_plain_path_when_no_symlink(runtime: RuntimeConfig):
+    runtime.model_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime.model_path.write_bytes(b"gguf-local")
+
+    resolved = resolve_model_runtime_path(runtime, runtime.model_path.name)
+    assert resolved == runtime.model_path
+
+
+def test_describe_model_storage_reports_local_for_all_models(runtime: RuntimeConfig):
+    runtime.model_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime.model_path.write_bytes(b"gguf-data")
+
+    storage = describe_model_storage(runtime, runtime.model_path.name)
+    assert storage["location"] == "local"
+    assert storage["exists"] is True
+    assert storage["size_bytes"] > 0
+
