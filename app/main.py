@@ -76,11 +76,15 @@ try:
     )
     from app.update_state import (
         build_update_status,
+        check_for_update,
         cleanup_staging,
         detect_post_update_state,
         download_release_tarball,
         extract_tarball,
         apply_staged_update,
+        is_update_safe,
+        mark_first_boot_update_done,
+        read_first_boot_update_done,
         signal_service_restart,
         staging_dir,
         write_execution_state,
@@ -196,11 +200,15 @@ except ModuleNotFoundError:
     )
     from update_state import (  # type: ignore[no-redef]
         build_update_status,
+        check_for_update,
         cleanup_staging,
         detect_post_update_state,
         download_release_tarball,
         extract_tarball,
         apply_staged_update,
+        is_update_safe,
+        mark_first_boot_update_done,
+        read_first_boot_update_done,
         signal_service_restart,
         staging_dir,
         write_execution_state,
@@ -1523,6 +1531,25 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
             else:
                 reset_llama_readiness_state(app, reason="model_missing")
                 app.state.llama_consecutive_failures = 0
+
+            # First-boot auto-update: check once, apply if available, then never again.
+            # Gated on llama READY — won't fire until the model is loaded and healthy.
+            llama_state = getattr(app.state, "llama_readiness_state", {}) or {}
+            device_ready = bool(llama_state.get("ready", False))
+            if device_ready and not read_first_boot_update_done(runtime):
+                if not is_download_task_active(app.state.model_download_task):
+                    safe, _reason = is_update_safe(runtime)
+                    if safe:
+                        try:
+                            result = await check_for_update(runtime)
+                            if result.get("available") and result.get("tarball_url"):
+                                logger.info("First-boot auto-update: v%s available, installing", result["latest_version"])
+                                await run_update(app, runtime, result["tarball_url"], result["latest_version"])
+                            else:
+                                logger.info("First-boot auto-update: no update available")
+                        except Exception:
+                            logger.warning("First-boot auto-update check failed", exc_info=True)
+                        mark_first_boot_update_done(runtime)
 
             await asyncio.sleep(2)
         except asyncio.CancelledError:
