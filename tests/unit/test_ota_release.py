@@ -48,8 +48,9 @@ def _package_ota_tarball(source_root: Path, staging: Path, version: str) -> Path
     prefix = staging / archive_name
     prefix.mkdir(parents=True)
 
-    subprocess.run(["cp", "-a", str(source_root / "app"), str(prefix / "app")], check=True)
-    subprocess.run(["cp", "-a", str(source_root / "bin"), str(prefix / "bin")], check=True)
+    env = {**os.environ, "COPYFILE_DISABLE": "1"}
+    subprocess.run(["cp", "-a", str(source_root / "app"), str(prefix / "app")], check=True, env=env)
+    subprocess.run(["cp", "-a", str(source_root / "bin"), str(prefix / "bin")], check=True, env=env)
     subprocess.run(["cp", str(source_root / "requirements.txt"), str(prefix / "requirements.txt")], check=True)
 
     tarball_path = staging / tarball_name
@@ -60,6 +61,7 @@ def _package_ota_tarball(source_root: Path, staging: Path, version: str) -> Path
             archive_name,
         ],
         check=True,
+        env=env,
     )
     return tarball_path
 
@@ -238,6 +240,27 @@ def test_publish_ota_dry_run_produces_tarball_and_checksum(tmp_path: Path):
 
     checksum_text = checksum.read_text(encoding="utf-8").strip()
     assert f"potato-os-{__version__}.tar.gz" in checksum_text
+
+
+def test_publish_ota_dry_run_excludes_macos_resource_forks(tmp_path: Path):
+    """OTA tarball must not contain ._ AppleDouble entries (macOS resource forks)."""
+    from app.__version__ import __version__
+
+    env = os.environ.copy()
+    env["POTATO_GITHUB_REPO"] = "test/repo"
+    subprocess.run(
+        [str(REPO_ROOT / "bin" / "publish_ota_release.sh"), "--version", f"v{__version__}", "--dry-run"],
+        check=True,
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+    )
+    tarball = tmp_path / f"potato-os-{__version__}.tar.gz"
+    with tarfile.open(str(tarball), "r:gz") as tf:
+        names = tf.getnames()
+
+    resource_fork_entries = [n for n in names if n.startswith("._") or "/._" in n]
+    assert resource_fork_entries == [], f"Found macOS resource fork entries: {resource_fork_entries}"
 
 
 def test_publish_ota_dry_run_rejects_invalid_version(tmp_path: Path):
