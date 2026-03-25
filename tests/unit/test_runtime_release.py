@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+import pytest
+
+from tests.unit.conftest import REPO_ROOT
+
+requires_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
 
 
 def _build_fake_runtime_slot(slot_dir: Path, *, family: str = "ik_llama", commit: str = "abc12345", profile: str = "pi5-opt") -> dict:
@@ -120,28 +125,64 @@ def test_resolve_llama_bundle_src_explicit_env_var_overrides_everything(tmp_path
     assert bundle_src_line < slot_line, "BUNDLE_SRC check must come before slot check"
 
 
-def test_publish_runtime_script_has_valid_bash_syntax():
-    """publish_runtime.sh must parse without bash syntax errors."""
-    script_path = REPO_ROOT / "bin" / "publish_runtime.sh"
-    assert script_path.exists(), f"publish_runtime.sh not found at {script_path}"
-    subprocess.run(["bash", "-n", str(script_path)], check=True, cwd=REPO_ROOT)
+@requires_jq
+def test_publish_runtime_dry_run_creates_tarball(tmp_path: Path):
+    """--dry-run builds the tarball locally without publishing."""
+    slot = tmp_path / "slot"
+    _build_fake_runtime_slot(slot, family="ik_llama", commit="abc12345", profile="pi5-opt")
+    env = os.environ.copy()
+    env["POTATO_GITHUB_REPO"] = "test/repo"
+    result = subprocess.run(
+        [str(REPO_ROOT / "bin" / "publish_runtime.sh"), "--family", "ik_llama", "--slot-dir", str(slot), "--dry-run"],
+        check=True,
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    tarball = tmp_path / "ik_llama-abc12345-pi5-opt.tar.gz"
+    assert tarball.exists(), f"tarball not found: {tarball}"
+    assert "Dry run" in result.stdout or "dry run" in result.stdout.lower()
+
+    with tarfile.open(str(tarball), "r:gz") as tar:
+        names = tar.getnames()
+    assert any("bin/llama-server" in n for n in names)
+    assert any("runtime.json" in n for n in names)
 
 
-def test_runtime_release_lib_has_valid_bash_syntax():
-    """bin/lib/runtime_release.sh must parse without bash syntax errors."""
-    script_path = REPO_ROOT / "bin" / "lib" / "runtime_release.sh"
-    assert script_path.exists(), f"runtime_release.sh not found at {script_path}"
-    subprocess.run(["bash", "-n", str(script_path)], check=True, cwd=REPO_ROOT)
+@requires_jq
+def test_publish_runtime_dry_run_rejects_missing_slot(tmp_path: Path):
+    """Missing slot directory must cause a hard failure."""
+    env = os.environ.copy()
+    env["POTATO_GITHUB_REPO"] = "test/repo"
+    result = subprocess.run(
+        [str(REPO_ROOT / "bin" / "publish_runtime.sh"), "--family", "ik_llama", "--slot-dir", "/nonexistent", "--dry-run"],
+        check=False,
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
 
 
-def test_publish_runtime_script_creates_tagged_release():
-    """Contract: publish_runtime.sh references the expected release workflow elements."""
-    script = (REPO_ROOT / "bin" / "publish_runtime.sh").read_text(encoding="utf-8")
-    assert "runtime.json" in script
-    assert "gh release create" in script
-    assert "runtime/" in script
-    assert "tar " in script or "tar\n" in script
-    assert "--family" in script
+@requires_jq
+def test_publish_runtime_dry_run_rejects_missing_server_binary(tmp_path: Path):
+    """Slot without bin/llama-server must be rejected."""
+    slot = tmp_path / "slot"
+    slot.mkdir()
+    (slot / "runtime.json").write_text('{"commit":"abc","family":"ik_llama","profile":"pi5-opt"}')
+    env = os.environ.copy()
+    env["POTATO_GITHUB_REPO"] = "test/repo"
+    result = subprocess.run(
+        [str(REPO_ROOT / "bin" / "publish_runtime.sh"), "--family", "ik_llama", "--slot-dir", str(slot), "--dry-run"],
+        check=False,
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
 
 
 def test_runtime_release_lib_provides_download_helpers():
